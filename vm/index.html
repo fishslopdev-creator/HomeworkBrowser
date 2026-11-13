@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tiny VM</title>
+<style>
+  :root {
+    --bg: #fdf6ff; --card: #ffffff; --ink: #3b3355; --muted: #8a80a8;
+    --accent: #a78bfa; --accent2: #f9a8d4; --ok: #34d399; --line: #ece4fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1726; --card: #262036; --ink: #eee8ff; --muted: #a59bc4; --line: #3a3150; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 14px 16px; gap: 12px; overflow: auto;
+  }
+  header { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 1060px; }
+  .logo { font-size: 22px; }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  .status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .spacer { flex: 1; }
+  button {
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    border-radius: 999px; padding: 6px 14px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .window {
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    padding: 10px; box-shadow: 0 8px 30px rgba(120, 90, 200, .12);
+    max-width: 100%;
+  }
+  .titlebar { display: flex; gap: 6px; padding: 2px 4px 8px; }
+  .titlebar span { width: 11px; height: 11px; border-radius: 50%; }
+  #screen { background: #000; border-radius: 10px; overflow: hidden; cursor: pointer; min-width: 320px; min-height: 240px; }
+  #screen > div { white-space: pre; font: 14px monospace; line-height: 14px; color: #ddd; }
+  #screen canvas {
+    display: block; width: auto !important; height: auto !important;
+    max-width: calc(100vw - 56px); max-height: calc(100vh - 200px);
+  }
+  .hint { color: var(--muted); font-size: 12.5px; text-align: center; }
+  .files {
+    width: 100%; max-width: 1060px; border: 2px dashed var(--line); border-radius: 14px;
+    padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  }
+  .chip { background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 999px; padding: 3px 4px 3px 10px; display: flex; align-items: center; gap: 4px; }
+  .chip button { border: none; background: none; padding: 0 6px; color: var(--muted); }
+  .drop {
+    position: fixed; inset: 0; display: none; place-items: center; z-index: 10;
+    background: color-mix(in srgb, var(--accent) 22%, transparent); backdrop-filter: blur(2px);
+  }
+  .drop div { background: var(--card); padding: 22px 30px; border-radius: 18px; font-size: 17px; border: 2px dashed var(--accent); }
+  body.dragging .drop { display: grid; }
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 999px; transition: transform .25s;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+  <header>
+    <span class="logo">🖥️</span>
+    <h1>Tiny VM</h1>
+    <span class="status"><span class="dot" id="dot"></span><span id="statusText">Starting…</span></span>
+    <span class="spacer"></span>
+    <button id="restart" title="Restart the virtual machine">↻ Restart</button>
+  </header>
+
+  <div class="window">
+    <div class="titlebar"><span style="background:#f9a8d4"></span><span style="background:#fde68a"></span><span style="background:#a7f3d0"></span></div>
+    <div id="screen"><div></div><canvas></canvas></div>
+  </div>
+  <div class="hint">Click the screen to use the mouse · press <b>Esc</b> to get it back</div>
+
+  <div class="files" id="files"></div>
+
+  <div class="drop"><div>📁 Drop to put files on the VM's disk</div></div>
+  <div class="toast" id="toast"></div>
+
+<script src="libv86.js"></script>
+<script>
+"use strict";
+const files = [];          // { name, data: Uint8Array }
+let emulator = null;
+const $ = (id) => document.getElementById(id);
+
+// ---------- tiny FAT16 disk image builder ----------
+function buildDisk(list) {
+  const SEC = 512, MB = 1024 * 1024, PART = 2048;
+  const dataBytes = list.reduce((a, f) => a + f.data.length, 0);
+  const total = Math.ceil(Math.max(32 * MB, dataBytes * 1.15 + 4 * MB) / MB) * MB;
+  const partSecs = total / SEC - PART;
+  let spc = 1;
+  while (partSecs / spc >= 65000) spc *= 2;
+  const reserved = 1, rootSecs = 32;
+  const fs = Math.ceil((partSecs / spc + 2) * 2 / SEC);
+  const dataStart = reserved + 2 * fs + rootSecs;
+  const clusters = Math.floor((partSecs - dataStart) / spc);
+
+  const buf = new Uint8Array(total);
+  const dv = new DataView(buf.buffer);
+  const str = (off, s) => { for (let i = 0; i < s.length; i++) buf[off + i] = s.charCodeAt(i); };
+
+  // MBR with one FAT16 partition
+  buf.set([0x00, 0xFE, 0xFF, 0xFF, 0x06, 0xFE, 0xFF, 0xFF], 446);
+  dv.setUint32(454, PART, true); dv.setUint32(458, partSecs, true);
+  buf[510] = 0x55; buf[511] = 0xAA;
+
+  // Boot sector
+  const P = PART * SEC;
+  buf.set([0xEB, 0x3C, 0x90], P); str(P + 3, "MSWIN4.1");
+  dv.setUint16(P + 11, SEC, true); buf[P + 13] = spc; dv.setUint16(P + 14, reserved, true);
+  buf[P + 16] = 2; dv.setUint16(P + 17, rootSecs * 16, true);
+  dv.setUint16(P + 19, partSecs < 65536 ? partSecs : 0, true); buf[P + 21] = 0xF8;
+  dv.setUint16(P + 22, fs, true); dv.setUint16(P + 24, 63, true); dv.setUint16(P + 26, 255, true);
+  dv.setUint32(P + 28, PART, true); dv.setUint32(P + 32, partSecs >= 65536 ? partSecs : 0, true);
+  buf[P + 36] = 0x80; buf[P + 38] = 0x29; dv.setUint32(P + 39, 0x484D574B, true);
+  str(P + 43, "HOMEWORK   "); str(P + 54, "FAT16   ");
+  buf[P + 510] = 0x55; buf[P + 511] = 0xAA;
+
+  const fat = (i, v) => { for (let k = 0; k < 2; k++) dv.setUint16(P + (reserved + k * fs) * SEC + i * 2, v, true); };
+  fat(0, 0xFFF8); fat(1, 0xFFFF);
+
+  const rootOff = P + (reserved + 2 * fs) * SEC;
+  const dataOff = P + dataStart * SEC;
+  const clusterBytes = spc * SEC;
+  let ent = 0, next = 2;
+  const entry = () => rootOff + 32 * ent++;
+
+  const now = new Date();
+  const ddate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const dtime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+
+  { const e = entry(); str(e, "HOMEWORK   "); buf[e + 11] = 0x08; }
+
+  const clean = (s) => s.toUpperCase().replace(/[^A-Z0-9!#$%&'()@^_`{}~-]/g, "_");
+  list.forEach((f, idx) => {
+    const dot = f.name.lastIndexOf(".");
+    const base = clean(dot > 0 ? f.name.slice(0, dot) : f.name) || "FILE";
+    const ext = clean(dot > 0 ? f.name.slice(dot + 1) : "").slice(0, 3);
+    const tail = "~" + (idx + 1);
+    const short = (base.slice(0, 8 - tail.length) + tail).padEnd(8) + ext.padEnd(3);
+
+    let sum = 0;
+    for (let i = 0; i < 11; i++) sum = ((((sum & 1) << 7) + (sum >> 1) + short.charCodeAt(i)) & 0xFF);
+
+    // long file name entries (so the real name shows up)
+    const units = Array.from(f.name).map(c => c.charCodeAt(0));
+    if (units.length % 13) units.push(0);
+    while (units.length % 13) units.push(0xFFFF);
+    const n = units.length / 13;
+    const slots = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+    for (let k = n; k >= 1; k--) {
+      const e = entry();
+      buf[e] = k | (k === n ? 0x40 : 0); buf[e + 11] = 0x0F; buf[e + 13] = sum;
+      slots.forEach((o, j) => dv.setUint16(e + o, units[(k - 1) * 13 + j], true));
+    }
+
+    const count = Math.ceil(f.data.length / clusterBytes);
+    const start = count ? next : 0;
+    for (let i = 0; i < count; i++) fat(next + i, i === count - 1 ? 0xFFFF : next + i + 1);
+    if (count) buf.set(f.data, dataOff + (start - 2) * clusterBytes);
+    next += count;
+
+    const e = entry();
+    str(e, short); buf[e + 11] = 0x20;
+    dv.setUint16(e + 14, dtime, true); dv.setUint16(e + 16, ddate, true); dv.setUint16(e + 18, ddate, true);
+    dv.setUint16(e + 22, dtime, true); dv.setUint16(e + 24, ddate, true);
+    dv.setUint16(e + 26, start, true); dv.setUint32(e + 28, f.data.length, true);
+  });
+  if (ent > rootSecs * 16) throw new Error("Too many files");
+  if (next - 2 > clusters) throw new Error("Disk full");
+  return buf.buffer;
+}
+
+// ---------- VM ----------
+async function boot() {
+  setStatus(false, "Booting…");
+  if (emulator) { try { await emulator.destroy(); } catch {} emulator = null; }
+  const screen = $("screen");
+  screen.innerHTML = "<div></div><canvas></canvas>";
+  emulator = new V86({
+    wasm_path: "v86.wasm",
+    memory_size: 128 * 1024 * 1024,
+    vga_memory_size: 8 * 1024 * 1024,
+    screen_container: screen,
+    bios: { url: "seabios.bin" },
+    vga_bios: { url: "vgabios.bin" },
+    fda: { url: "kolibri.img" },
+    hda: { buffer: buildDisk(files) },
+    autostart: true,
+  });
+  emulator.add_listener("emulator-ready", () => setStatus(true, "Running"));
+}
+
+function setStatus(on, text) { $("dot").classList.toggle("on", on); $("statusText").textContent = text; }
+
+let toastTimer;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 3500);
+}
+
+function renderFiles() {
+  const box = $("files");
+  box.innerHTML = "";
+  if (!files.length) {
+    box.innerHTML = "<span class='hint'>📁 Drag files anywhere onto this page to put them on the VM's disk. In the VM, open the file manager and go to <b>/hd0/1</b>.</span>";
+    return;
+  }
+  const label = document.createElement("span");
+  label.className = "hint"; label.innerHTML = "On the VM's disk (<b>/hd0/1</b>):";
+  box.appendChild(label);
+  files.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip"; chip.textContent = f.name;
+    const x = document.createElement("button");
+    x.textContent = "×"; x.title = "Remove (restarts the VM)";
+    x.onclick = () => { files.splice(i, 1); renderFiles(); boot(); };
+    chip.appendChild(x); box.appendChild(chip);
+  });
+}
+
+// drag & drop
+let depth = 0;
+addEventListener("dragenter", e => { e.preventDefault(); depth++; document.body.classList.add("dragging"); });
+addEventListener("dragleave", e => { if (--depth <= 0) { depth = 0; document.body.classList.remove("dragging"); } });
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", async e => {
+  e.preventDefault(); depth = 0; document.body.classList.remove("dragging");
+  const dropped = [...e.dataTransfer.files];
+  if (!dropped.length) return;
+  for (const f of dropped) {
+    if (f.size > 400 * 1024 * 1024) { toast(`${f.name} is too big (max 400 MB)`); continue; }
+    const existing = files.findIndex(x => x.name === f.name);
+    const item = { name: f.name, data: new Uint8Array(await f.arrayBuffer()) };
+    if (existing >= 0) files[existing] = item; else files.push(item);
+  }
+  renderFiles();
+  toast(`Added ${dropped.length} file${dropped.length > 1 ? "s" : ""} — restarting VM so it sees them`);
+  try { await boot(); } catch (err) { toast(err.message); }
+});
+
+$("screen").addEventListener("click", () => emulator && emulator.lock_mouse());
+$("restart").onclick = () => boot();
+
+renderFiles();
+boot();
+</script>
+</body>
+</html>

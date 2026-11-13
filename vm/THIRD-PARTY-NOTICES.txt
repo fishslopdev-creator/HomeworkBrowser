@@ -1,0 +1,8 @@
+Tiny VM bundles these open-source components:
+
+- v86 (x86 emulator) - BSD-2-Clause - https://github.com/copy/v86 (see LICENSE-v86.txt)
+- SeaBIOS (seabios.bin) - LGPLv3 - source: https://www.seabios.org / https://github.com/copy/v86/tree/master/bios
+- VGA BIOS (vgabios.bin) - LGPL - source: https://github.com/copy/v86/tree/master/bios
+- KolibriOS (kolibri.img) - GPLv2 - source: https://kolibrios.org and https://git.kolibrios.org
+
+These are included unmodified as separate programs that run inside the emulator.

@@ -1,6 +1,8 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -24,6 +26,45 @@ class BrowserForm : Form
     readonly Button back = Btn("←"), fwd = Btn("→"), reload = Btn("⟳"), home = Btn("⌂"), go = Btn("Go");
     readonly string startUrl;
 
+    // Tiny VM tab: a v86 x86 emulator running KolibriOS, served from resources embedded in the exe
+    const string VmHost = "https://tinyvm.local/";
+    readonly TabControl tabs = new TabControl { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 10f), Padding = new Point(14, 4) };
+    readonly TabPage vmTab = new TabPage("🖥️  Tiny VM");
+    readonly WebView2 vmWeb = new WebView2 { Dock = DockStyle.Fill };
+    CoreWebView2Environment env;
+    bool vmStarted;
+
+    async Task StartVm()
+    {
+        if (vmStarted || env == null) return;
+        vmStarted = true;
+        await vmWeb.EnsureCoreWebView2Async(env);
+        var vm = vmWeb.CoreWebView2;
+        vm.Settings.AreBrowserAcceleratorKeysEnabled = false; // let F5, Ctrl+R etc. go to the VM
+        vm.Settings.AreDefaultContextMenusEnabled = false;
+        vm.AddWebResourceRequestedFilter(VmHost + "*", CoreWebView2WebResourceContext.All);
+        vm.WebResourceRequested += (_, a) =>
+        {
+            var name = new Uri(a.Request.Uri).AbsolutePath.TrimStart('/');
+            if (name.Length == 0) name = "index.html";
+            var res = Assembly.GetExecutingAssembly().GetManifestResourceStream("vm/" + name);
+            if (res == null) { a.Response = env.CreateWebResourceResponse(null, 404, "Not Found", ""); return; }
+            var ms = new MemoryStream();
+            res.CopyTo(ms);
+            ms.Position = 0;
+            a.Response = env.CreateWebResourceResponse(ms, 200, "OK", "Content-Type: " + MimeFor(name));
+        };
+        vm.Navigate(VmHost + "index.html");
+    }
+
+    static string MimeFor(string name) => Path.GetExtension(name).ToLowerInvariant() switch
+    {
+        ".html" => "text/html; charset=utf-8",
+        ".js" => "text/javascript",
+        ".wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    };
+
     static Button Btn(string t) => new Button { Text = t, Width = 40, Dock = DockStyle.Left, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 11f) };
 
     public BrowserForm(string start)
@@ -45,8 +86,14 @@ class BrowserForm : Form
         bar.Controls.Add(fwd);
         bar.Controls.Add(back);
 
-        Controls.Add(web);
-        Controls.Add(bar);
+        var webTab = new TabPage("🌐  Web");
+        webTab.Controls.Add(web);
+        webTab.Controls.Add(bar);
+        vmTab.Controls.Add(vmWeb);
+        tabs.TabPages.Add(webTab);
+        tabs.TabPages.Add(vmTab);
+        tabs.SelectedIndexChanged += async (s, e) => { if (tabs.SelectedTab == vmTab) await StartVm(); };
+        Controls.Add(tabs);
 
         back.Click += (s, e) => { if (web.CanGoBack) web.GoBack(); };
         fwd.Click += (s, e) => { if (web.CanGoForward) web.GoForward(); };
@@ -65,7 +112,7 @@ class BrowserForm : Form
             try
             {
                 var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HomeworkBrowser");
-                var env = await CoreWebView2Environment.CreateAsync(null, dataDir);
+                env = await CoreWebView2Environment.CreateAsync(null, dataDir);
                 await web.EnsureCoreWebView2Async(env);
             }
             catch (WebView2RuntimeNotFoundException)
@@ -81,12 +128,15 @@ class BrowserForm : Form
             core.HistoryChanged += (_, __) => { back.Enabled = core.CanGoBack; fwd.Enabled = core.CanGoForward; };
             // Open popups / target=_blank in the same window
             core.NewWindowRequested += (_, a) => { a.Handled = true; core.Navigate(a.Uri); };
-            Navigate(startUrl ?? Home);
+            bool openVm = startUrl == "--vm";
+            Navigate(openVm ? Home : startUrl ?? Home);
+            if (openVm) tabs.SelectedTab = vmTab;
         };
     }
 
     void OnKeys(object s, KeyEventArgs e)
     {
+        if (tabs.SelectedTab == vmTab) return;
         if (e.Control && e.KeyCode == Keys.L) { address.Focus(); address.SelectAll(); }
         else if (e.KeyCode == Keys.F5) web.Reload();
         else if (e.Alt && e.KeyCode == Keys.Left && web.CanGoBack) web.GoBack();
