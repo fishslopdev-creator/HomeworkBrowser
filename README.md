@@ -1,19 +1,32 @@
-# MiniBrowser
+# Homework Browser
 
-A bare-bones Windows browser with Google as the built-in search engine. One `.exe`, no install.
+A simple, no-frills web browser for doing homework and research. It opens straight to Google, so you can search, read and look things up without the clutter.
+
+One `.exe`, no install, no setup.
 
 ## Download
-Grab `MiniBrowser.exe` from the [Releases](../../releases) page and run it.
+Grab **`HomeworkBrowser.exe`** from the [latest release](../../releases/latest) and double-click it.
 
-Requires Windows 10/11 (x64). Uses the Edge WebView2 engine that ships with Windows.
+Works on Windows 10 and 11 (64-bit). It uses the Microsoft Edge WebView2 engine that's already built into Windows.
 
-## Use
-- Type a URL (`github.com`) or anything else to search Google
-- Back / Forward / Reload / Home buttons
-- `Ctrl+L` address bar, `F5` reload, `Alt+←/→` back/forward, `Alt+Home` home
+> The first time you run it, Windows SmartScreen may say it "protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
-## Build
+## How to use
+- Type a question or topic in the address bar to search Google, or type a site like `wikipedia.org` to go straight there
+- **Back**, **Forward**, **Reload** and **Home** buttons along the top
+- No extensions, no tabs, nothing extra
+
+### Keyboard shortcuts
+| Key | Does |
+| --- | --- |
+| `Ctrl+L` | Jump to the address bar |
+| `F5` | Reload |
+| `Alt+←` / `Alt+→` | Back / Forward |
+| `Alt+Home` | Go to Google |
+
+## Build it yourself
+Needs the [.NET 8 SDK](https://dotnet.microsoft.com/download).
 ```
 dotnet publish -c Release -o out
 ```
-Output: `out/MiniBrowser.exe`. Pushing a tag like `v1.0.0` builds and attaches the exe to a GitHub Release automatically.
+Output: `out/HomeworkBrowser.exe`. Pushing a tag like `v1.2.0` builds the exe and publishes a GitHub Release automatically.

@@ -29,7 +29,7 @@ class BrowserForm : Form
     public BrowserForm(string start)
     {
         startUrl = start;
-        Text = "MiniBrowser";
+        Text = "Homework Browser";
         Size = new Size(1280, 800);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
@@ -64,20 +64,20 @@ class BrowserForm : Form
         {
             try
             {
-                var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MiniBrowser");
+                var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HomeworkBrowser");
                 var env = await CoreWebView2Environment.CreateAsync(null, dataDir);
                 await web.EnsureCoreWebView2Async(env);
             }
             catch (WebView2RuntimeNotFoundException)
             {
                 MessageBox.Show("Microsoft Edge WebView2 Runtime is required (built into Windows 10/11).\nGet it at https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-                    "MiniBrowser", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    "Homework Browser", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Close();
                 return;
             }
             var core = web.CoreWebView2;
             core.SourceChanged += (_, __) => address.Text = core.Source;
-            core.DocumentTitleChanged += (_, __) => Text = core.DocumentTitle + " - MiniBrowser";
+            core.DocumentTitleChanged += (_, __) => Text = core.DocumentTitle + " - Homework Browser";
             core.HistoryChanged += (_, __) => { back.Enabled = core.CanGoBack; fwd.Enabled = core.CanGoForward; };
             // Open popups / target=_blank in the same window
             core.NewWindowRequested += (_, a) => { a.Handled = true; core.Navigate(a.Uri); };
